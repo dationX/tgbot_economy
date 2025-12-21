@@ -1,9 +1,9 @@
 import telebot
 import os
-import numpy as np
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_gigachat.chat_models import GigaChat
 import random
+import matplotlib.pyplot as plt
 
 from config import *
 from db_logic import *
@@ -11,6 +11,8 @@ from db_logic import *
 
 bot = telebot.TeleBot(TOKEN)
 
+user_graphs = {}
+counts = {}
 
 def create_data(string_data):
     """Создание словаря для создания графика роста цен"""
@@ -35,7 +37,7 @@ giga = GigaChat(
     verify_ssl_certs=False,
 )
 
-# Промпт для нейросети
+# История чата + промпт для нейросети
 messages = [
     SystemMessage(
         content="""
@@ -76,8 +78,14 @@ def help_command(message: telebot.types.Message):
 
 @bot.message_handler(commands=['clear'])
 def clear_command(message: telebot.types.Message):
-    import matplotlib.pyplot as plt
-    plt.clf()
+    chat_id = message.chat.id
+    if chat_id in user_graphs:
+        plt.close(user_graphs[chat_id][0])
+        del user_graphs[chat_id]
+        bot.send_message(chat_id, "Текущий график очищен. Можете добавлять новые продукты.")
+    else:
+        bot.send_message(chat_id, "У вас пока нет активного графика для очистки.")
+
 
 @bot.message_handler(commands=['answer'])
 def answer_command(message: telebot.types.Message):
@@ -87,49 +95,62 @@ def answer_command(message: telebot.types.Message):
     bot.send_message(message.chat.id, res.content, parse_mode='markdown')
 
 
-# Шаблон: params_bot[tg_id] = [[color, x, y, label], [color, x, y, label]]
-params_bot ={}
-
-
 @bot.message_handler(content_types=['text'])
 def all_messages(message: telebot.types.Message):
-    import matplotlib.pyplot as plt
+    chat_id = message.chat.id
+    user_input = message.text
+    filename = f'graph_{chat_id}.png'
 
     try:
-        if message.from_user.id not in params_bot.keys():
-            params_bot[message.from_user.id] = []
-
-        user_input = message.text
         messages.append(HumanMessage(content=user_input))
         res = giga.invoke(messages)
         messages.append(res)
         
         data_user = create_data(res.content)
 
-        plt.switch_backend('Agg') 
-        plt.xlabel('Год')
-        plt.ylabel('Цена')
+        # Создание графика
+        if chat_id not in user_graphs:
+            plt.switch_backend('Agg')
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.set_title("Рост цен на разные продукты")
+            ax.set_xlabel('Год')
+            ax.set_ylabel('Цена (руб)')
+            ax.grid(True, linestyle='--', alpha=0.7)
+            user_graphs[chat_id] = (fig, ax)
+        else:
+            fig, ax = user_graphs[chat_id]
 
-        plt.title("Рост цен на разные продукты")
+        # Выбор цвета
         colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
+        current_colors = [line.get_color() for line in ax.lines]
+        new_colors = []
 
-        color = random.choice(colors)
-        params_bot[message.from_user.id].append([data_user.keys, data_user.values(), random.choice(colors), user_input])
-        plt.plot(data_user.keys(), data_user.values(), color=random.choice(colors), marker='o', markersize=7, label=user_input)
-        # plt.xticks(np.arange(min(data_user.keys()), max(data_user.keys())+1))
-        plt.legend(loc='upper right')
-        plt.savefig(f'{message.text}_{message.from_user.id}')
+        if current_colors:
+            for col in colors:
+                if col not in current_colors:
+                    new_colors.append(col)
+
+            color = random.choice(new_colors)
+        else:
+            color = random.choice(colors)
+
+        # Отрисовка графика
+        ax.plot(list(data_user.keys()), list(data_user.values()), color=color, marker='o', markersize=7, label=user_input)
         
-        with open(f'{message.text}_{message.from_user.id}.png', 'rb') as photo:
-            bot.send_photo(message.chat.id, photo)
-            os.remove(f'{message.text}_{message.from_user.id}.png')
-
-        plt.close()
+        ax.legend(loc='upper left')
+        ax.set_xticks(range(min(data_user.keys()), max(data_user.keys())+1))
+        
+        plt.savefig(filename)
+        
+        with open(filename, 'rb') as photo:
+            bot.send_photo(chat_id, photo)
     except:
-        bot.send_message(message.chat.id, "Введите корректный запрос!")
+        bot.send_message(chat_id, "Попробуйте еще раз или введите корректный запрос! Произошла ошибка при построении или обновлении графика.")
+    
+    try:
+        os.remove(filename)
+    except:
+        pass 
 
-            
 if __name__ == "__main__":
     bot.polling(non_stop=True)
-
-
