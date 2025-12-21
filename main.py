@@ -6,7 +6,6 @@ import random
 import matplotlib.pyplot as plt
 
 from config import *
-from db_logic import *
 
 
 bot = telebot.TeleBot(TOKEN)
